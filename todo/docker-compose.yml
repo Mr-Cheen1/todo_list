@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:13
+    volumes:
+      - ./init.d:/docker-entrypoint-initdb.d
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 4217
+      POSTGRES_DB: todo_db
+    ports:
+      - "8080:8080"
+    command: -p 8080
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    ports:
+      - "8081:8081"
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_PORT: 8080
+      DB_USER: postgres
+      DB_PASSWORD: 4217
+      DB_NAME: todo_db
+    command: ["/app/myserver", "0.0.0.0", "8081"]

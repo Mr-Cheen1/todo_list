@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление задачами</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <img src="checklist-1024.webp" alt="Логотип Todo List" style="width: 200px; margin-bottom: 20px;">
+    <form id="task-form">
+        <input type="text" id="task-input" placeholder="Добавить задачу...">
+        <button type="submit">Добавить</button>
+    </form>
+    <div class="filters">
+        <span>Фильтрация по статусу:</span>
+        <select id="status-filter">
+            <option value="">Все</option>
+            <option value="в процессе">В процессе</option>
+            <option value="завершено">Завершено</option>
+        </select>
+        <span>Сортировка:</span>
+        <select id="sort-filter">
+            <option value="">Выберите</option>
+            <option value="asc">По возрастанию</option>
+            <option value="desc">По убыванию</option>
+        </select>
+    </div>
+    <ul class="task-list" id="task-list">
+        <!-- Список задач будет отображаться здесь -->
+    </ul>
+
+    <script src="script.js"></script>
+</body>
+</html>
