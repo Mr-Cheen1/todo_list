@@ -47,7 +47,7 @@ func main() {
 
 	// Регистрация обработчиков.
 	// Для локального запуска.
-	// Поменяй на http.Handle("/", http.FileServer(http.Dir("./static")))
+	// Поменяйте на http.Handle("/", http.FileServer(http.Dir("./static")))
 	http.Handle("/", http.FileServer(http.Dir("/app/static")))
 	http.HandleFunc("/api/tasks", handlers.GetTasks)
 	http.HandleFunc("/api/tasks/create", handlers.CreateTask)
