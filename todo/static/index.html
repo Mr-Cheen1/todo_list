@@ -10,14 +10,15 @@
     <img src="checklist-1024.webp" alt="Логотип Todo List" style="width: 200px; margin-bottom: 20px;">
     <form id="task-form">
         <input type="text" id="task-input" placeholder="Добавить задачу...">
+        <input type="date" id="expected-date-input">
         <button type="submit">Добавить</button>
     </form>
     <div class="filters">
         <span>Фильтрация по статусу:</span>
         <select id="status-filter">
             <option value="">Все</option>
-            <option value="в процессе">В процессе</option>
-            <option value="завершено">Завершено</option>
+            <option value="0">В процессе</option>
+            <option value="1">Завершено</option>
         </select>
         <span>Сортировка:</span>
         <select id="sort-filter">

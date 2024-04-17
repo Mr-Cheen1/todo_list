@@ -3,31 +3,65 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
+const (
+	StatusInProgress = iota
+	StatusCompleted
+)
+
 type Task struct {
-	ID     int       `json:"id"`
-	Text   string    `json:"text"`
-	Date   time.Time `json:"date"`
-	Status string    `json:"status"`
+	ID           int64     `json:"id"`
+	Text         string    `json:"text"`
+	CreatedDate  time.Time `json:"createdDate"`
+	ExpectedDate time.Time `json:"expectedDate"`
+	Status       int       `json:"status"`
 }
 
-func GetAllTasks(statusFilter, sortOrder string) ([]Task, error) {
+func GetAllTasks(statusFilter, sortOrder, sortField string) ([]Task, error) {
 	var tasks []Task
 	var rows *sql.Rows
 	var err error
-	query := "SELECT id, task_text, task_date, status FROM tasks"
+
+	query := "SELECT id, task_text, createdDate, expectedDate, status FROM tasks"
+	var conditions []string
+	var args []interface{}
 
 	if statusFilter != "" {
-		query += " WHERE status = '" + statusFilter + "'"
+		conditions = append(conditions, "status = $1")
+		args = append(args, statusFilter)
 	}
 
-	if sortOrder != "" {
-		query += " ORDER BY task_date " + sortOrder
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	rows, err = DB.Query(query)
+	// Белый список допустимых значений для sortField.
+	validSortFields := map[string]bool{
+		"id":           true,
+		"task_text":    true,
+		"createdDate":  true,
+		"expectedDate": true,
+		"status":       true,
+	}
+
+	if sortField != "" {
+		// Проверяем, находится ли sortField в белом списке.
+		if validSortFields[sortField] {
+			query += " ORDER BY " + sortField
+			if sortOrder == "desc" {
+				query += " DESC"
+			}
+		} else {
+			// Если sortField не находится в белом списке, возвращаем ошибку.
+			return nil, fmt.Errorf("invalid sort field: %s", sortField)
+		}
+	}
+
+	rows, err = DB.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +69,7 @@ func GetAllTasks(statusFilter, sortOrder string) ([]Task, error) {
 
 	for rows.Next() {
 		var task Task
-		if scanErr := rows.Scan(&task.ID, &task.Text, &task.Date, &task.Status); scanErr != nil {
+		if scanErr := rows.Scan(&task.ID, &task.Text, &task.CreatedDate, &task.ExpectedDate, &task.Status); scanErr != nil {
 			return nil, scanErr
 		}
 		tasks = append(tasks, task)
@@ -49,14 +83,16 @@ func GetAllTasks(statusFilter, sortOrder string) ([]Task, error) {
 }
 
 func CreateTask(task Task) error {
-	query := "INSERT INTO tasks (task_text, task_date, status) VALUES ($1, $2, $3)"
-	_, err := DB.Exec(query, task.Text, task.Date.UTC(), task.Status)
+	query := "INSERT INTO tasks (task_text, createdDate, expectedDate, status) VALUES ($1, $2, $3, $4)"
+	_, err := DB.Exec(query, task.Text, task.CreatedDate, task.ExpectedDate, task.Status)
 	return err
 }
 
 func UpdateTask(task Task) error {
-	result, err := DB.Exec("UPDATE tasks SET task_text = $1, task_date = $2, status = $3 WHERE id = $4",
-		task.Text, task.Date, task.Status, task.ID)
+	result, err := DB.Exec(
+		"UPDATE tasks SET task_text = $1, createdDate = $2, expectedDate = $3, status = $4 WHERE id = $5",
+		task.Text, task.CreatedDate, task.ExpectedDate, task.Status, task.ID,
+	)
 	if err != nil {
 		return err
 	}

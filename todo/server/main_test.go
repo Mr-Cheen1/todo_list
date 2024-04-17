@@ -1,13 +1,13 @@
-package main_test
+package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Mr-Cheen1/todo_list/server/db"
@@ -16,137 +16,126 @@ import (
 )
 
 func TestIntegration(t *testing.T) {
-	// Создание мока базы данных.
 	mockDB, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer mockDB.Close()
 
-	// Замена глобальной переменной DB на мок.
 	db.DB = mockDB
 
-	// Создание тестового сервера.
-	router := http.NewServeMux()
-	router.Handle("/", http.FileServer(http.Dir("./static")))
-	router.HandleFunc("/api/tasks", handlers.GetTasks)
-	router.HandleFunc("/api/tasks/create", handlers.CreateTask)
-	router.HandleFunc("/api/tasks/update", handlers.UpdateTask)
-	router.HandleFunc("/api/tasks/delete", handlers.DeleteTask)
-	srv := httptest.NewServer(router)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks", handlers.GetTasks)
+	mux.HandleFunc("/api/tasks/create", handlers.CreateTask)
+	mux.HandleFunc("/api/tasks/update", handlers.UpdateTask)
+	mux.HandleFunc("/api/tasks/delete", handlers.DeleteTask)
+
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// Тест создания задачи.
-	taskText := "Test Task"
-	taskStatus := "в процессе"
-	taskJSON := `{"text":"` + taskText + `","status":"` + taskStatus + `"}`
+	task := db.Task{
+		Text:   "Test Task",
+		Status: db.StatusInProgress,
+	}
+	taskJSON, _ := json.Marshal(task)
 
 	mock.ExpectExec("INSERT INTO tasks").
-		WithArgs(taskText, sqlmock.AnyArg(), taskStatus).
+		WithArgs(task.Text, sqlmock.AnyArg(), sqlmock.AnyArg(), task.Status).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	req, err := http.NewRequestWithContext(context.Background(),
-		http.MethodPost,
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		"POST",
 		srv.URL+"/api/tasks/create",
-		strings.NewReader(taskJSON),
+		bytes.NewBuffer(taskJSON),
 	)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
-	assert.NoError(t, err)
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 
-	var createdTask db.Task
-	err = json.NewDecoder(resp.Body).Decode(&createdTask)
 	assert.NoError(t, err)
-	assert.Equal(t, taskText, createdTask.Text)
-	assert.Equal(t, taskStatus, createdTask.Status)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	// Тест обновления задачи.
-	updatedTaskText := "Updated Task"
-	updatedTaskStatus := "выполнено"
-	updatedTaskJSON := `{"id":` + strconv.Itoa(createdTask.ID) +
-		`,"text":"` + updatedTaskText +
-		`","status":"` + updatedTaskStatus +
-		`","date":"` + createdTask.Date.Format("2006-01-02T15:04:05Z07:00") + `"}`
+	var createdTask db.Task
+	json.NewDecoder(resp.Body).Decode(&createdTask)
+	assert.Equal(t, task.Text, createdTask.Text)
+	assert.Equal(t, task.Status, createdTask.Status)
 
-	mock.ExpectExec("UPDATE tasks").
-		WithArgs(updatedTaskText, createdTask.Date, updatedTaskStatus, createdTask.ID).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	fixedTime := time.Date(2023, time.April, 4, 11, 15, 0, 0, time.UTC)
+	task1 := db.Task{ID: 1, Text: "Task 1", CreatedDate: fixedTime, ExpectedDate: fixedTime, Status: db.StatusInProgress}
+	task2 := db.Task{ID: 2, Text: "Task 2", CreatedDate: fixedTime, ExpectedDate: fixedTime, Status: db.StatusCompleted}
+	expectedTasks := []db.Task{task1, task2}
+
+	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
+		AddRow(task1.ID, task1.Text, task1.CreatedDate, task1.ExpectedDate, task1.Status).
+		AddRow(task2.ID, task2.Text, task2.CreatedDate, task2.ExpectedDate, task2.Status)
+	mock.ExpectQuery("SELECT id, task_text, createdDate, expectedDate, status FROM tasks").WillReturnRows(rows)
+
+	req, err = http.NewRequestWithContext(context.Background(), "GET", srv.URL+"/api/tasks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var actualTasks []db.Task
+	json.NewDecoder(resp.Body).Decode(&actualTasks)
+	assert.Equal(t, expectedTasks, actualTasks)
+
+	updatedTask := db.Task{
+		ID:           1,
+		Text:         "Updated Task",
+		Status:       db.StatusCompleted,
+		CreatedDate:  time.Now().UTC(),
+		ExpectedDate: time.Now().UTC().AddDate(0, 0, 1),
+	}
+	updatedTaskJSON, _ := json.Marshal(updatedTask)
+
+	mock.ExpectExec("UPDATE tasks SET task_text = \\$1, createdDate = \\$2, "+
+		"expectedDate = \\$3, status = \\$4 WHERE id = \\$5").
+		WithArgs(updatedTask.Text, updatedTask.CreatedDate, updatedTask.ExpectedDate, updatedTask.Status, updatedTask.ID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	req, err = http.NewRequestWithContext(
 		context.Background(),
-		http.MethodPost,
-		srv.URL+"/api/tasks/update?id="+strconv.Itoa(createdTask.ID),
-		strings.NewReader(updatedTaskJSON),
+		http.MethodPut,
+		srv.URL+"/api/tasks/update?id=1",
+		bytes.NewBuffer(updatedTaskJSON),
 	)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err = http.DefaultClient.Do(req)
-	assert.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
-
-	// Обновление ожидаемого значения.
-	expectedTask := db.Task{
-		ID:     createdTask.ID,
-		Text:   updatedTaskText,
-		Date:   createdTask.Date,
-		Status: updatedTaskStatus,
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Тест получения списка задач.
-	rows := sqlmock.NewRows([]string{"id", "task_text", "task_date", "status"}).
-		AddRow(expectedTask.ID, expectedTask.Text, expectedTask.Date, expectedTask.Status)
-	mock.ExpectQuery("SELECT id, task_text, task_date, status FROM tasks").WillReturnRows(rows)
-
-	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/tasks", nil)
-	assert.NoError(t, err)
-
-	resp, err = http.DefaultClient.Do(req)
+	defer resp.Body.Close()
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
 
-	var tasks []db.Task
-	err = json.NewDecoder(resp.Body).Decode(&tasks)
-	assert.NoError(t, err)
-	assert.Len(t, tasks, 1)
-	assert.Equal(t, expectedTask, tasks[0])
+	mock.ExpectExec("DELETE FROM tasks WHERE id = \\$1").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Тест удаления задачи.
-	mock.ExpectExec("DELETE FROM tasks").WithArgs(createdTask.ID).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	req, err = http.NewRequestWithContext(
-		context.Background(),
-		http.MethodDelete,
-		srv.URL+"/api/tasks/delete?id="+strconv.Itoa(createdTask.ID),
-		nil,
-	)
-	assert.NoError(t, err)
-
+	req, _ = http.NewRequestWithContext(context.Background(), http.MethodDelete, srv.URL+"/api/tasks/delete?id=1", nil)
 	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
 
-	// Проверка, что задача удалена.
-	mock.ExpectQuery("SELECT id, task_text, task_date, status FROM tasks").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "task_text", "task_date", "status"}))
-
-	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/tasks", nil)
-	assert.NoError(t, err)
-
-	resp, err = http.DefaultClient.Do(req)
-	assert.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
-
-	tasks = []db.Task{}
-	err = json.NewDecoder(resp.Body).Decode(&tasks)
-	assert.NoError(t, err)
-	assert.Len(t, tasks, 0)
-
-	// Проверка вызовов моков.
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

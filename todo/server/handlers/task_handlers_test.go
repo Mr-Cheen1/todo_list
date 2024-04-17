@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,33 +17,28 @@ import (
 )
 
 func TestGetTasks(t *testing.T) {
-	// Подготовка тестовых данных.
 	fixedTime := time.Date(2023, time.April, 4, 11, 15, 0, 0, time.UTC)
-	task1 := db.Task{ID: 1, Text: "Task 1", Date: fixedTime, Status: "в процессе"}
-	task2 := db.Task{ID: 2, Text: "Task 2", Date: fixedTime, Status: "завершено"}
+	task1 := db.Task{ID: 1, Text: "Task 1", CreatedDate: fixedTime, Status: db.StatusInProgress}
+	task2 := db.Task{ID: 2, Text: "Task 2", CreatedDate: fixedTime, Status: db.StatusCompleted}
 	expectedTasks := []db.Task{task1, task2}
 
-	// Мок базы данных.
 	mockDB, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer mockDB.Close()
 
-	// Ожидаемый запрос и результат.
-	rows := sqlmock.NewRows([]string{"id", "task_text", "task_date", "status"}).
-		AddRow(task1.ID, task1.Text, task1.Date, task1.Status).
-		AddRow(task2.ID, task2.Text, task2.Date, task2.Status)
-	mock.ExpectQuery("SELECT id, task_text, task_date, status FROM tasks").WillReturnRows(rows)
+	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
+		AddRow(task1.ID, task1.Text, task1.CreatedDate, task1.ExpectedDate, task1.Status).
+		AddRow(task2.ID, task2.Text, task2.CreatedDate, task2.ExpectedDate, task2.Status)
+	mock.ExpectQuery("SELECT id, task_text, createdDate, expectedDate, status FROM tasks").WillReturnRows(rows)
 
-	// Заменяем глобальную переменную DB на мок базы данных.
 	db.DB = mockDB
 
-	// Выполнение тестируемой функции.
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/api/tasks", nil)
+	req := httptest.NewRequest("GET", "/api/tasks", nil)
 	rr := httptest.NewRecorder()
+
 	handler := http.HandlerFunc(GetTasks)
 	handler.ServeHTTP(rr, req)
 
-	// Проверка результатов.
 	assert.Equal(t, http.StatusOK, rr.Code)
 	var actualTasks []db.Task
 	err = json.Unmarshal(rr.Body.Bytes(), &actualTasks)
@@ -52,15 +48,18 @@ func TestGetTasks(t *testing.T) {
 
 func TestCreateTask(t *testing.T) {
 	taskText := "New Task"
-	taskStatus := "в процессе"
-	taskJSON := fmt.Sprintf(`{"text":"%s","status":"%s"}`, taskText, taskStatus)
+	taskStatus := db.StatusInProgress
+	createdDate := time.Now().UTC()
+	expectedDate := createdDate.AddDate(0, 0, 1)
+	taskJSON := fmt.Sprintf(`{"text":"%s","status":%d,"createdDate":"%s","expectedDate":"%s"}`,
+		taskText, taskStatus, createdDate.Format(time.RFC3339), expectedDate.Format(time.RFC3339))
 
 	mockDB, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer mockDB.Close()
 
 	mock.ExpectExec("INSERT INTO tasks").
-		WithArgs(taskText, sqlmock.AnyArg(), taskStatus).
+		WithArgs(taskText, sqlmock.AnyArg(), sqlmock.AnyArg(), taskStatus).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	db.DB = mockDB
@@ -80,33 +79,54 @@ func TestCreateTask(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, taskText, createdTask.Text)
 	assert.Equal(t, taskStatus, createdTask.Status)
+	assert.WithinDuration(t, createdDate, createdTask.CreatedDate, time.Second)
+	assert.WithinDuration(t, expectedDate, createdTask.ExpectedDate, time.Second)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestUpdateTask(t *testing.T) {
-	taskID := 1
-	taskText := "Updated Task"
-	taskStatus := "завершено"
-	taskJSON := fmt.Sprintf(`{"text":"%s","status":"%s"}`, taskText, taskStatus)
+	fixedTime := time.Date(2023, time.April, 4, 11, 15, 0, 0, time.UTC)
+	expectedTime := fixedTime.Add(48 * time.Hour)
+
+	taskToUpdate := db.Task{
+		ID:           1,
+		Text:         "Updated Task",
+		CreatedDate:  fixedTime,
+		ExpectedDate: expectedTime,
+		Status:       db.StatusInProgress,
+	}
+
+	taskJSON, err := json.Marshal(taskToUpdate)
+	if err != nil {
+		t.Fatalf("Error marshaling task: %v", err)
+	}
 
 	mockDB, mock, err := sqlmock.New()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("Error creating sqlmock: %v", err)
+	}
 	defer mockDB.Close()
 
-	mock.ExpectExec("UPDATE tasks SET").
-		WithArgs(taskText, sqlmock.AnyArg(), taskStatus, taskID).
+	mock.ExpectExec(`
+    UPDATE tasks 
+    SET task_text = \$1, createdDate = \$2, expectedDate = \$3, status = \$4 
+    WHERE id = \$5
+`).WithArgs(taskToUpdate.Text, fixedTime, expectedTime, taskToUpdate.Status, taskToUpdate.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	db.DB = mockDB
 
 	req, err := http.NewRequestWithContext(
 		context.Background(),
-		http.MethodPut,
-		fmt.Sprintf("/api/tasks/update?id=%d", taskID),
-		strings.NewReader(taskJSON),
+		"PUT",
+		"/api/tasks/update?id=1",
+		bytes.NewBuffer(taskJSON),
 	)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("Error creating request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	rr := httptest.NewRecorder()
 
@@ -115,7 +135,9 @@ func TestUpdateTask(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	assert.NoError(t, mock.ExpectationsWereMet())
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("There were unfulfilled expectations: %s", err)
+	}
 }
 
 func TestDeleteTask(t *testing.T) {

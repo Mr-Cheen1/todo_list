@@ -23,19 +23,13 @@ func main() {
 	address := os.Args[1]
 	port := os.Args[2]
 
-	// os.Setenv("DB_HOST", "localhost")
-	// os.Setenv("DB_PORT", "8080")
-	// os.Setenv("DB_USER", "postgres")
-	// os.Setenv("DB_PASSWORD", "4217")
-	// os.Setenv("DB_NAME", "todo_db")
+	dbHost := os.Getenv("DB_HOST")
+	dbPort := os.Getenv("DB_PORT")
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbName := os.Getenv("DB_NAME")
 
-	// fmt.Println("DB_HOST:", os.Getenv("DB_HOST"))
-	// fmt.Println("DB_PORT:", os.Getenv("DB_PORT"))
-	// fmt.Println("DB_USER:", os.Getenv("DB_USER"))
-	// fmt.Println("DB_PASSWORD:", os.Getenv("DB_PASSWORD"))
-	// fmt.Println("DB_NAME:", os.Getenv("DB_NAME"))
-
-	db.InitDB()
+	db.InitDB(dbHost, dbPort, dbUser, dbPassword, dbName)
 	defer db.CloseDB()
 
 	// Создание экземпляра сервера.
@@ -45,16 +39,12 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// Регистрация обработчиков.
-	// Для локального запуска.
-	// Поменяйте на http.Handle("/", http.FileServer(http.Dir("./static")))
 	http.Handle("/", http.FileServer(http.Dir("/app/static")))
 	http.HandleFunc("/api/tasks", handlers.GetTasks)
 	http.HandleFunc("/api/tasks/create", handlers.CreateTask)
 	http.HandleFunc("/api/tasks/update", handlers.UpdateTask)
 	http.HandleFunc("/api/tasks/delete", handlers.DeleteTask)
 
-	// Запуск сервера в отдельной горутине.
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("ListenAndServe(): %v", err)
@@ -63,7 +53,6 @@ func main() {
 
 	log.Printf("Server listening on %s:%s", address, port)
 
-	// Ожидание сигнала для graceful shutdown.
 	if err := gracefulShutdown(srv); err != nil {
 		log.Println("Failed to gracefully shutdown:", err)
 		return
