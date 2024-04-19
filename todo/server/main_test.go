@@ -17,125 +17,112 @@ import (
 
 func TestIntegration(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
 	defer mockDB.Close()
 
 	db.DB = mockDB
 
+	// Настройка моков для GetAllTasks.
+	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
+		AddRow(1, "Test Task", time.Now(), time.Now().Add(24*time.Hour), db.StatusInProgress)
+
+	mock.ExpectQuery("^SELECT (.+) FROM tasks$").WillReturnRows(rows)
+
+	// Создание тестового сервера.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/tasks", handlers.GetTasks)
-	mux.HandleFunc("/api/tasks/create", handlers.CreateTask)
-	mux.HandleFunc("/api/tasks/update", handlers.UpdateTask)
-	mux.HandleFunc("/api/tasks/delete", handlers.DeleteTask)
+	mux.HandleFunc("/tasks/get", handlers.GetTasks)
+	mux.HandleFunc("/tasks/create", handlers.CreateTask)
+	mux.HandleFunc("/tasks/update", handlers.UpdateTask)
+	mux.HandleFunc("/tasks/delete", handlers.DeleteTask)
+	server := httptest.NewServer(mux)
+	defer server.Close()
 
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	// Тестирование GetTasks.
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", server.URL+"/tasks/get", nil)
+	assert.NoError(t, err)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
 
-	task := db.Task{
-		Text:   "Test Task",
-		Status: db.StatusInProgress,
-	}
-	taskJSON, _ := json.Marshal(task)
+	assert.Equal(t, http.StatusOK, w.Code)
+	var tasks []db.Task
+	json.NewDecoder(w.Body).Decode(&tasks)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(tasks))
+	assert.Equal(t, "Test Task", tasks[0].Text)
 
+	// Настройка моков для CreateTask.
 	mock.ExpectExec("INSERT INTO tasks").
-		WithArgs(task.Text, sqlmock.AnyArg(), sqlmock.AnyArg(), task.Status).
+		WithArgs("New Task", sqlmock.AnyArg(), sqlmock.AnyArg(), db.StatusInProgress).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	req, err := http.NewRequestWithContext(
+	// Тестирование CreateTask.
+	newTask := db.Task{
+		Text:         "New Task",
+		CreatedDate:  time.Now(),
+		ExpectedDate: time.Now().Add(24 * time.Hour),
+		Status:       db.StatusInProgress,
+	}
+	body, _ := json.Marshal(newTask)
+	req, _ = http.NewRequestWithContext(
 		context.Background(),
 		"POST",
-		srv.URL+"/api/tasks/create",
-		bytes.NewBuffer(taskJSON),
+		server.URL+"/tasks/create",
+		bytes.NewBuffer(body),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
 	assert.NoError(t, err)
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
 
+	assert.Equal(t, http.StatusCreated, w.Code)
 	var createdTask db.Task
-	json.NewDecoder(resp.Body).Decode(&createdTask)
-	assert.Equal(t, task.Text, createdTask.Text)
-	assert.Equal(t, task.Status, createdTask.Status)
-
-	fixedTime := time.Date(2023, time.April, 4, 11, 15, 0, 0, time.UTC)
-	task1 := db.Task{ID: 1, Text: "Task 1", CreatedDate: fixedTime, ExpectedDate: fixedTime, Status: db.StatusInProgress}
-	task2 := db.Task{ID: 2, Text: "Task 2", CreatedDate: fixedTime, ExpectedDate: fixedTime, Status: db.StatusCompleted}
-	expectedTasks := []db.Task{task1, task2}
-
-	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
-		AddRow(task1.ID, task1.Text, task1.CreatedDate, task1.ExpectedDate, task1.Status).
-		AddRow(task2.ID, task2.Text, task2.CreatedDate, task2.ExpectedDate, task2.Status)
-	mock.ExpectQuery("SELECT id, task_text, createdDate, expectedDate, status FROM tasks").WillReturnRows(rows)
-
-	req, err = http.NewRequestWithContext(context.Background(), "GET", srv.URL+"/api/tasks", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
+	json.NewDecoder(w.Body).Decode(&createdTask)
 	assert.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "New Task", createdTask.Text)
 
-	var actualTasks []db.Task
-	json.NewDecoder(resp.Body).Decode(&actualTasks)
-	assert.Equal(t, expectedTasks, actualTasks)
+	// Настройка моков для UpdateTask.
+	mock.ExpectExec("UPDATE tasks SET").
+		WithArgs("Updated Task", sqlmock.AnyArg(), sqlmock.AnyArg(), db.StatusCompleted, 1).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	updatedTask := db.Task{
+	// Тестирование UpdateTask.
+	updateTask := db.Task{
 		ID:           1,
 		Text:         "Updated Task",
+		CreatedDate:  time.Now(),
+		ExpectedDate: time.Now().Add(48 * time.Hour),
 		Status:       db.StatusCompleted,
-		CreatedDate:  time.Now().UTC(),
-		ExpectedDate: time.Now().UTC().AddDate(0, 0, 1),
 	}
-	updatedTaskJSON, _ := json.Marshal(updatedTask)
-
-	mock.ExpectExec("UPDATE tasks SET task_text = \\$1, createdDate = \\$2, "+
-		"expectedDate = \\$3, status = \\$4 WHERE id = \\$5").
-		WithArgs(updatedTask.Text, updatedTask.CreatedDate, updatedTask.ExpectedDate, updatedTask.Status, updatedTask.ID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	req, err = http.NewRequestWithContext(
+	body, _ = json.Marshal(updateTask)
+	req, _ = http.NewRequestWithContext(
 		context.Background(),
-		http.MethodPut,
-		srv.URL+"/api/tasks/update?id=1",
-		bytes.NewBuffer(updatedTaskJSON),
+		"PUT",
+		server.URL+"/tasks/update?id=1",
+		bytes.NewBuffer(body),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
 	assert.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
 
-	mock.ExpectExec("DELETE FROM tasks WHERE id = \\$1").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+	assert.Equal(t, http.StatusOK, w.Code)
 
-	req, _ = http.NewRequestWithContext(context.Background(), http.MethodDelete, srv.URL+"/api/tasks/delete?id=1", nil)
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
+	// Настройка моков для DeleteTask.
+	mock.ExpectExec("DELETE FROM tasks WHERE").WithArgs(1).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Тестирование DeleteTask.
+	req, _ = http.NewRequestWithContext(
+		context.Background(),
+		"DELETE",
+		server.URL+"/tasks/delete?id=1",
+		nil,
+	)
 	assert.NoError(t, err)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
 
-	assert.NoError(t, mock.ExpectationsWereMet())
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
 }

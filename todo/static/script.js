@@ -27,7 +27,9 @@ document.getElementById('task-form').addEventListener('submit', async function(e
   }
   
   const currentDate = new Date();
-  if (new Date(expectedDate) <= currentDate) {
+  currentDate.setUTCHours(0, 0, 0, 0); // Установка времени в полночь по UTC
+
+  if (new Date(expectedDate + 'T00:00:00Z') <= currentDate) {
     alert('Планируемая дата завершения не может быть раньше текущей даты');
     return;
   }
@@ -35,7 +37,7 @@ document.getElementById('task-form').addEventListener('submit', async function(e
   const task = {
     text: taskText,
     createdDate: currentDate.toISOString(),
-    expectedDate: new Date(expectedDate).toISOString(),
+    expectedDate: new Date(expectedDate + 'T00:00:00Z').toISOString(), // Установка времени в полночь по UTC
     status: 0
   };
   
@@ -146,12 +148,12 @@ document.getElementById('task-list').addEventListener('change', async function(e
     const statusSelect = taskItem.querySelector('.status-select');
 
     const updatedTask = {
-      id: taskId, 
+      id: taskId,
       text: taskText,
-      createdDate: taskItem.querySelector('.task-created-date').textContent,
-      expectedDate: taskItem.querySelector('.task-expected-date').textContent,
+      createdDate: new Date(taskItem.querySelector('.task-created-date').textContent + 'T00:00:00Z').toISOString(),
+      expectedDate: new Date(taskItem.querySelector('.task-expected-date').textContent + 'T00:00:00Z').toISOString(),
       status: parseInt(statusSelect.value)
-    };
+  };
 
     try {
       await updateTask(updatedTask);
@@ -240,7 +242,7 @@ async function refreshTaskList() {
    
   taskItem.innerHTML = `
     <span class="task-text">${task.text}</span>
-    <span class="task-created-date">${new Date(task.createdDate).toISOString()}</span>
+    <span class="task-created-date">${task.createdDate}</span>
     <span class="task-expected-date">${task.expectedDate}</span>
     <input type="text" class="edit-input" style="display: none;">
     <input type="date" class="expected-date-input" style="display: none;">

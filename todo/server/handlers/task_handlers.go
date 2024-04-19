@@ -77,7 +77,6 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error decoding task: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 	task.ID = int64(id)
 
 	log.Printf("Updating task: %+v", task)

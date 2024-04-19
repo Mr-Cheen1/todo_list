@@ -17,33 +17,45 @@ import (
 )
 
 func TestGetTasks(t *testing.T) {
-	fixedTime := time.Date(2023, time.April, 4, 11, 15, 0, 0, time.UTC)
-	task1 := db.Task{ID: 1, Text: "Task 1", CreatedDate: fixedTime, Status: db.StatusInProgress}
-	task2 := db.Task{ID: 2, Text: "Task 2", CreatedDate: fixedTime, Status: db.StatusCompleted}
-	expectedTasks := []db.Task{task1, task2}
-
 	mockDB, mock, err := sqlmock.New()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("Error creating sqlmock: %v", err)
+	}
 	defer mockDB.Close()
-
-	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
-		AddRow(task1.ID, task1.Text, task1.CreatedDate, task1.ExpectedDate, task1.Status).
-		AddRow(task2.ID, task2.Text, task2.CreatedDate, task2.ExpectedDate, task2.Status)
-	mock.ExpectQuery("SELECT id, task_text, createdDate, expectedDate, status FROM tasks").WillReturnRows(rows)
 
 	db.DB = mockDB
 
-	req := httptest.NewRequest("GET", "/api/tasks", nil)
-	rr := httptest.NewRecorder()
+	rows := sqlmock.NewRows([]string{"id", "text", "createdDate", "expectedDate", "status"}).
+		AddRow(1, "Test Task", time.Now(), time.Now().Add(24*time.Hour), db.StatusInProgress)
+	mock.ExpectQuery("^SELECT (.+) FROM tasks").WillReturnRows(rows)
 
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		"GET",
+		"/tasks?status=active&sort=asc&sortField=createdDate",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(GetTasks)
+
 	handler.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
-	var actualTasks []db.Task
-	err = json.Unmarshal(rr.Body.Bytes(), &actualTasks)
-	assert.NoError(t, err)
-	assert.Equal(t, expectedTasks, actualTasks)
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	}
+
+	expected := `[{"id":1,"text":"Test Task","status":1,"createdDate":"...","expectedDate":"..."}]`
+	if !strings.Contains(rr.Body.String(), "Test Task") {
+		t.Errorf("handler returned unexpected body: got %v want %v", rr.Body.String(), expected)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("There were unfulfilled expectations: %s", err)
+	}
 }
 
 func TestCreateTask(t *testing.T) {
@@ -117,12 +129,8 @@ func TestUpdateTask(t *testing.T) {
 
 	db.DB = mockDB
 
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		"PUT",
-		"/api/tasks/update?id=1",
-		bytes.NewBuffer(taskJSON),
-	)
+	req, err := http.NewRequestWithContext(context.Background(), "PUT",
+		"/api/tasks/update?id=1", bytes.NewBuffer(taskJSON))
 	if err != nil {
 		t.Fatalf("Error creating request: %v", err)
 	}

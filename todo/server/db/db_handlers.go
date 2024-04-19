@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +20,19 @@ type Task struct {
 	CreatedDate  time.Time `json:"createdDate"`
 	ExpectedDate time.Time `json:"expectedDate"`
 	Status       int       `json:"status"`
+}
+
+func (t *Task) MarshalJSON() ([]byte, error) {
+	type Alias Task
+	return json.Marshal(&struct {
+		CreatedDate  string `json:"createdDate"`
+		ExpectedDate string `json:"expectedDate"`
+		*Alias
+	}{
+		CreatedDate:  t.CreatedDate.Format("2006-01-02"),
+		ExpectedDate: t.ExpectedDate.Format("2006-01-02"),
+		Alias:        (*Alias)(t),
+	})
 }
 
 func GetAllTasks(statusFilter, sortOrder, sortField string) ([]Task, error) {
@@ -113,4 +127,29 @@ func DeleteTask(id int) error {
 	query := "DELETE FROM tasks WHERE id = $1"
 	_, err := DB.Exec(query, id)
 	return err
+}
+
+func (t *Task) UnmarshalJSON(data []byte) error {
+	type Alias Task
+	aux := &struct {
+		CreatedDate  string `json:"createdDate"`
+		ExpectedDate string `json:"expectedDate"`
+		*Alias
+	}{
+		Alias: (*Alias)(t),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	var err error
+	// Обновленный формат для полной даты и времени.
+	t.CreatedDate, err = time.Parse(time.RFC3339, aux.CreatedDate)
+	if err != nil {
+		return err
+	}
+	t.ExpectedDate, err = time.Parse(time.RFC3339, aux.ExpectedDate)
+	if err != nil {
+		return err
+	}
+	return nil
 }
