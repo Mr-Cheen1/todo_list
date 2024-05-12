@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Тест для обработчика GetTasks.
 func TestGetTasks(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -58,20 +58,21 @@ func TestGetTasks(t *testing.T) {
 	}
 }
 
+// Тест для обработчика CreateTask.
 func TestCreateTask(t *testing.T) {
 	taskText := "New Task"
 	taskStatus := db.StatusInProgress
-	createdDate := time.Now().UTC()
+	createdDate := time.Now().UTC().Truncate(24 * time.Hour)
 	expectedDate := createdDate.AddDate(0, 0, 1)
 	taskJSON := fmt.Sprintf(`{"text":"%s","status":%d,"createdDate":"%s","expectedDate":"%s"}`,
-		taskText, taskStatus, createdDate.Format(time.RFC3339), expectedDate.Format(time.RFC3339))
+		taskText, taskStatus, createdDate.Format("2006-01-02"), expectedDate.Format("2006-01-02"))
 
 	mockDB, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer mockDB.Close()
 
 	mock.ExpectExec("INSERT INTO tasks").
-		WithArgs(taskText, sqlmock.AnyArg(), sqlmock.AnyArg(), taskStatus).
+		WithArgs(taskText, createdDate.Format("2006-01-02"), expectedDate.Format("2006-01-02"), taskStatus).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	db.DB = mockDB
@@ -91,14 +92,15 @@ func TestCreateTask(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, taskText, createdTask.Text)
 	assert.Equal(t, taskStatus, createdTask.Status)
-	assert.WithinDuration(t, createdDate, createdTask.CreatedDate, time.Second)
-	assert.WithinDuration(t, expectedDate, createdTask.ExpectedDate, time.Second)
+	assert.Equal(t, createdDate.Format("2006-01-02"), createdTask.CreatedDate.Format("2006-01-02"))
+	assert.Equal(t, expectedDate.Format("2006-01-02"), createdTask.ExpectedDate.Format("2006-01-02"))
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Тест для обработчика UpdateTask.
 func TestUpdateTask(t *testing.T) {
-	fixedTime := time.Date(2023, time.April, 4, 11, 15, 0, 0, time.UTC)
+	fixedTime := time.Date(2023, time.April, 4, 0, 0, 0, 0, time.UTC)
 	expectedTime := fixedTime.Add(48 * time.Hour)
 
 	taskToUpdate := db.Task{
@@ -109,31 +111,25 @@ func TestUpdateTask(t *testing.T) {
 		Status:       db.StatusInProgress,
 	}
 
-	taskJSON, err := json.Marshal(taskToUpdate)
-	if err != nil {
-		t.Fatalf("Error marshaling task: %v", err)
-	}
+	taskJSON := fmt.Sprintf(`{"id":%d,"text":"%s","status":%d,"createdDate":"%s","expectedDate":"%s"}`,
+		taskToUpdate.ID, taskToUpdate.Text, taskToUpdate.Status,
+		taskToUpdate.CreatedDate.Format("2006-01-02"), taskToUpdate.ExpectedDate.Format("2006-01-02"))
 
 	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("Error creating sqlmock: %v", err)
-	}
+	assert.NoError(t, err)
 	defer mockDB.Close()
 
-	mock.ExpectExec(`
-    UPDATE tasks 
-    SET task_text = \$1, createdDate = \$2, expectedDate = \$3, status = \$4 
-    WHERE id = \$5
-`).WithArgs(taskToUpdate.Text, fixedTime, expectedTime, taskToUpdate.Status, taskToUpdate.ID).
+	mock.ExpectExec(`UPDATE tasks SET task_text = \$1, createdDate = \$2, 
+		expectedDate = \$3, status = \$4 WHERE id = \$5`).
+		WithArgs(taskToUpdate.Text, taskToUpdate.CreatedDate.Format("2006-01-02"),
+			taskToUpdate.ExpectedDate.Format("2006-01-02"), taskToUpdate.Status, taskToUpdate.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	db.DB = mockDB
 
 	req, err := http.NewRequestWithContext(context.Background(), "PUT",
-		"/api/tasks/update?id=1", bytes.NewBuffer(taskJSON))
-	if err != nil {
-		t.Fatalf("Error creating request: %v", err)
-	}
+		"/api/tasks/update?id=1", strings.NewReader(taskJSON))
+	assert.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 
 	rr := httptest.NewRecorder()
@@ -143,11 +139,10 @@ func TestUpdateTask(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("There were unfulfilled expectations: %s", err)
-	}
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Тест для обработчика DeleteTask.
 func TestDeleteTask(t *testing.T) {
 	taskID := 1
 

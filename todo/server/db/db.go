@@ -7,8 +7,10 @@ import (
 	_ "github.com/lib/pq" // Импорт драйвера PostgreSQL для использования с database/sql.
 )
 
+// DB - глобальная переменная для хранения соединения с базой данных.
 var DB *sql.DB
 
+// Функция для инициализации соединения с базой данных.
 func InitDB(host, port, user, password, dbname string) {
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
 
@@ -19,6 +21,7 @@ func InitDB(host, port, user, password, dbname string) {
 	}
 }
 
+// Функция для закрытия соединения с базой данных.
 func CloseDB() {
 	DB.Close()
 }
