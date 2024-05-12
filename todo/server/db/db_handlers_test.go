@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Структура AnyTime используется для сопоставления любых значений типа time.Time в тестах.
 type AnyTime struct{}
 
 func (a AnyTime) Match(v driver.Value) bool {
@@ -16,6 +17,7 @@ func (a AnyTime) Match(v driver.Value) bool {
 	return ok
 }
 
+// Тест для функции GetAllTasks.
 func TestGetAllTasks(t *testing.T) {
 	// Подготовка тестовых данных.
 	fixedTime := time.Now()
@@ -69,12 +71,14 @@ func TestGetAllTasks(t *testing.T) {
 
 			DB = db // Замена глобальной переменной DB на мок базы данных.
 
+			// Настройка ожидаемого запроса и возвращаемых данных.
 			rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"})
 			for _, task := range tc.expectedTasks {
 				rows.AddRow(task.ID, task.Text, task.CreatedDate, task.ExpectedDate, task.Status)
 			}
 			mock.ExpectQuery("SELECT id, task_text, createdDate, expectedDate, status FROM tasks").WillReturnRows(rows)
 
+			// Вызов тестируемой функции.
 			tasks, err := GetAllTasks(tc.statusFilter, tc.sortOrder, "")
 
 			assert.NoError(t, err)
@@ -83,12 +87,13 @@ func TestGetAllTasks(t *testing.T) {
 	}
 }
 
+// Тест для функции CreateTask.
 func TestCreateTask(t *testing.T) {
 	task := Task{
 		Text:         "New Task",
 		Status:       StatusInProgress,
-		CreatedDate:  time.Now(),
-		ExpectedDate: time.Now(),
+		CreatedDate:  time.Now().Truncate(24 * time.Hour),
+		ExpectedDate: time.Now().Add(24 * time.Hour).Truncate(24 * time.Hour),
 	}
 
 	db, mock, err := sqlmock.New()
@@ -97,21 +102,29 @@ func TestCreateTask(t *testing.T) {
 
 	DB = db
 
+	createdDateStr := task.CreatedDate.Format("2006-01-02")
+	expectedDateStr := task.ExpectedDate.Format("2006-01-02")
+
+	// Настройка ожидаемого запроса и возвращаемого результата.
 	mock.ExpectExec("INSERT INTO tasks").
-		WithArgs(task.Text, AnyTime{}, AnyTime{}, task.Status).
+		WithArgs(task.Text, createdDateStr, expectedDateStr, task.Status).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	// Вызов тестируемой функции.
 	err = CreateTask(task)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Тест для функции UpdateTask.
 func TestUpdateTask(t *testing.T) {
 	task := Task{
-		ID:     1,
-		Text:   "Updated Task",
-		Status: StatusCompleted,
+		ID:           1,
+		Text:         "Updated Task",
+		Status:       StatusCompleted,
+		CreatedDate:  time.Now().Truncate(24 * time.Hour),
+		ExpectedDate: time.Now().Add(24 * time.Hour).Truncate(24 * time.Hour),
 	}
 
 	db, mock, err := sqlmock.New()
@@ -120,17 +133,23 @@ func TestUpdateTask(t *testing.T) {
 
 	DB = db
 
+	createdDateStr := task.CreatedDate.Format("2006-01-02")
+	expectedDateStr := task.ExpectedDate.Format("2006-01-02")
+
+	// Настройка ожидаемого запроса и возвращаемого результата.
 	mock.ExpectExec("UPDATE tasks SET task_text = \\$1, createdDate = \\$2, "+
 		"expectedDate = \\$3, status = \\$4 WHERE id = \\$5").
-		WithArgs(task.Text, AnyTime{}, AnyTime{}, task.Status, task.ID).
+		WithArgs(task.Text, createdDateStr, expectedDateStr, task.Status, task.ID).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	// Вызов тестируемой функции.
 	err = UpdateTask(task)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// Тест для функции DeleteTask.
 func TestDeleteTask(t *testing.T) {
 	taskID := 1
 
@@ -140,10 +159,12 @@ func TestDeleteTask(t *testing.T) {
 
 	DB = db
 
+	// Настройка ожидаемого запроса и возвращаемого результата.
 	mock.ExpectExec("DELETE FROM tasks WHERE id = \\$1").
 		WithArgs(taskID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
+	// Вызов тестируемой функции.
 	err = DeleteTask(taskID)
 
 	assert.NoError(t, err)

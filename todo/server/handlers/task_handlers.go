@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Mr-Cheen1/todo_list/server/db"
 )
 
+// Обработчик для получения списка задач.
 func GetTasks(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	sortOrder := r.URL.Query().Get("sort")
@@ -21,6 +23,7 @@ func GetTasks(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tasks)
 }
 
+// Обработчик для создания новой задачи.
 func CreateTask(w http.ResponseWriter, r *http.Request) {
 	var task db.Task
 	err := json.NewDecoder(r.Body).Decode(&task)
@@ -33,9 +36,16 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received task data: %+v", task)
 
+	task.Text = strings.TrimSpace(task.Text)
 	if task.Text == "" {
 		log.Println("Task text is empty")
 		http.Error(w, `{"message": "Task text cannot be empty"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(task.Text) > 255 {
+		log.Println("Task text is too long")
+		http.Error(w, `{"message": "Task text cannot exceed 255 characters"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -44,7 +54,10 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if task.Status != db.StatusInProgress && task.Status != db.StatusCompleted {
+	if task.Status != db.StatusInProgress &&
+		task.Status != db.StatusCompleted &&
+		task.Status != db.StatusTesting &&
+		task.Status != db.StatusReturned {
 		log.Printf("Invalid task status: %d", task.Status)
 		http.Error(w, `{"message": "Invalid task status"}`, http.StatusBadRequest)
 		return
@@ -60,9 +73,15 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Task created successfully: %+v", task)
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(task)
+	jsonData, err := task.MarshalJSON()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write(jsonData)
 }
 
+// Обработчик для обновления существующей задачи.
 func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	idStr := r.URL.Query().Get("id")
 	id, err := strconv.Atoi(idStr)
@@ -81,8 +100,9 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Updating task: %+v", task)
 
+	task.Text = strings.TrimSpace(task.Text)
 	if task.Text == "" {
-		http.Error(w, "Task text is required", http.StatusBadRequest)
+		http.Error(w, "Task text cannot be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -92,11 +112,15 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(task.Text) > 255 {
+		log.Println("Task text is too long")
 		http.Error(w, "Task text cannot exceed 255 characters", http.StatusBadRequest)
 		return
 	}
 
-	if task.Status != db.StatusInProgress && task.Status != db.StatusCompleted {
+	if task.Status != db.StatusInProgress &&
+		task.Status != db.StatusCompleted &&
+		task.Status != db.StatusTesting &&
+		task.Status != db.StatusReturned {
 		http.Error(w, "Incorrect task status", http.StatusBadRequest)
 		return
 	}
@@ -116,9 +140,19 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error updating task: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("Task updated successfully: %+v", task)
+
 	w.WriteHeader(http.StatusOK)
+	jsonData, err := task.MarshalJSON()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write(jsonData)
 }
 
+// Обработчик для удаления задачи.
 func DeleteTask(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	err := db.DeleteTask(id)

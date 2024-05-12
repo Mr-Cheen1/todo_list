@@ -1,5 +1,9 @@
 version: '3.8'
+
+# Блок описания сервисов.
 services:
+
+  # Сервис базы данных.
   db:
     image: postgres:13
     volumes:
@@ -12,6 +16,7 @@ services:
       - "8080:8080"
     command: -p 8080
 
+  # Сервис сервера приложения.
   server:
     build:
       context: .
