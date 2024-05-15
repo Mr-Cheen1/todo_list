@@ -20,32 +20,32 @@ func GetTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(tasks)
+
+	taskDTOs := make([]db.TaskDTO, 0, len(tasks))
+	for _, task := range tasks {
+		taskDTOs = append(taskDTOs, task.ToDTO())
+	}
+
+	json.NewEncoder(w).Encode(taskDTOs)
 }
 
 // Обработчик для создания новой задачи.
 func CreateTask(w http.ResponseWriter, r *http.Request) {
-	var task db.Task
-	err := json.NewDecoder(r.Body).Decode(&task)
-	if err != nil {
-		log.Printf("Error decoding task: %v", err)
-		http.Error(w, `{"message": "Invalid request payload"}`, http.StatusBadRequest)
+	var taskDTO db.TaskDTO
+	if err := json.NewDecoder(r.Body).Decode(&taskDTO); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
-	log.Printf("Received task data: %+v", task)
+	task, err := taskDTO.ToTask()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	task.Text = strings.TrimSpace(task.Text)
 	if task.Text == "" {
-		log.Println("Task text is empty")
-		http.Error(w, `{"message": "Task text cannot be empty"}`, http.StatusBadRequest)
-		return
-	}
-
-	if len(task.Text) > 255 {
-		log.Println("Task text is too long")
-		http.Error(w, `{"message": "Task text cannot exceed 255 characters"}`, http.StatusBadRequest)
+		http.Error(w, "Task text cannot be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -54,31 +54,39 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(task.Text) > 255 {
+		log.Println("Task text is too long")
+		http.Error(w, "Task text cannot exceed 255 characters", http.StatusBadRequest)
+		return
+	}
+
 	if task.Status != db.StatusInProgress &&
 		task.Status != db.StatusCompleted &&
 		task.Status != db.StatusTesting &&
 		task.Status != db.StatusReturned {
-		log.Printf("Invalid task status: %d", task.Status)
-		http.Error(w, `{"message": "Invalid task status"}`, http.StatusBadRequest)
+		http.Error(w, "Incorrect task status", http.StatusBadRequest)
 		return
 	}
 
-	err = db.CreateTask(task)
-	if err != nil {
-		log.Printf("Failed to create task: %v", err)
-		http.Error(w, `{"message": "Failed to create task"}`, http.StatusInternalServerError)
+	if task.CreatedDate.IsZero() {
+		http.Error(w, "Task created date is required", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Task created successfully: %+v", task)
+	if task.ExpectedDate.IsZero() {
+		http.Error(w, "Task expected date is required", http.StatusBadRequest)
+		return
+	}
 
-	w.WriteHeader(http.StatusCreated)
-	jsonData, err := task.MarshalJSON()
+	id, err := db.CreateTask(task)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Write(jsonData)
+
+	task.ID = id
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(task.ToDTO())
 }
 
 // Обработчик для обновления существующей задачи.
@@ -90,10 +98,16 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var task db.Task
-	err = json.NewDecoder(r.Body).Decode(&task)
+	var taskDTO db.TaskDTO
+	err = json.NewDecoder(r.Body).Decode(&taskDTO)
 	if err != nil {
 		http.Error(w, "Error decoding task: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	task, err := taskDTO.ToTask()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	task.ID = int64(id)
@@ -144,21 +158,41 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Task updated successfully: %+v", task)
 
 	w.WriteHeader(http.StatusOK)
-	jsonData, err := task.MarshalJSON()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Write(jsonData)
+	json.NewEncoder(w).Encode(task.ToDTO())
 }
 
 // Обработчик для удаления задачи.
 func DeleteTask(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
-	err := db.DeleteTask(id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		http.Error(w, "Missing id parameter", http.StatusBadRequest)
 		return
 	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid id parameter", http.StatusBadRequest)
+		return
+	}
+
+	result, err := db.DB.Exec("DELETE FROM tasks WHERE id = $1", id)
+	if err != nil {
+		log.Printf("Error deleting task: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error getting rows affected: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 }

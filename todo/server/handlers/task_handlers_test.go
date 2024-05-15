@@ -71,9 +71,10 @@ func TestCreateTask(t *testing.T) {
 	assert.NoError(t, err)
 	defer mockDB.Close()
 
-	mock.ExpectExec("INSERT INTO tasks").
+	// Ожидаем, что запрос INSERT вернет ID 1
+	mock.ExpectQuery("INSERT INTO tasks").
 		WithArgs(taskText, createdDate.Format("2006-01-02"), expectedDate.Format("2006-01-02"), taskStatus).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
 	db.DB = mockDB
 
@@ -87,13 +88,14 @@ func TestCreateTask(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 
-	var createdTask db.Task
+	var createdTask db.TaskDTO
 	err = json.Unmarshal(rr.Body.Bytes(), &createdTask)
 	assert.NoError(t, err)
+	assert.Equal(t, int64(1), createdTask.ID) // Проверяем, что ID равен 1
 	assert.Equal(t, taskText, createdTask.Text)
 	assert.Equal(t, taskStatus, createdTask.Status)
-	assert.Equal(t, createdDate.Format("2006-01-02"), createdTask.CreatedDate.Format("2006-01-02"))
-	assert.Equal(t, expectedDate.Format("2006-01-02"), createdTask.ExpectedDate.Format("2006-01-02"))
+	assert.Equal(t, createdDate.Format("2006-01-02"), createdTask.CreatedDate)
+	assert.Equal(t, expectedDate.Format("2006-01-02"), createdTask.ExpectedDate)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

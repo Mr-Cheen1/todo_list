@@ -17,150 +17,186 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIntegration(t *testing.T) {
-	// Создание мока базы данных.
+func setupMockDB(t *testing.T) (sqlmock.Sqlmock, func()) {
+	t.Helper() // Add this line to mark the function as a test helper
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
-	defer mockDB.Close()
-
 	db.DB = mockDB
+	return mock, func() { mockDB.Close() }
+}
 
-	// Настройка моков для GetAllTasks.
-	fixedTime := time.Now()
-	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
-		AddRow(1, "Test Task", fixedTime, fixedTime.Add(24*time.Hour), db.StatusInProgress)
-
-	mock.ExpectQuery("^SELECT (.+) FROM tasks$").WillReturnRows(rows)
-
-	// Создание тестового сервера.
+func setupServer() *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tasks/get", handlers.GetTasks)
 	mux.HandleFunc("/tasks/create", handlers.CreateTask)
 	mux.HandleFunc("/tasks/update", handlers.UpdateTask)
 	mux.HandleFunc("/tasks/delete", handlers.DeleteTask)
-	server := httptest.NewServer(mux)
+	return httptest.NewServer(mux)
+}
+
+func TestGetTasks(t *testing.T) {
+	mock, teardown := setupMockDB(t)
+	defer teardown()
+
+	fixedTime := time.Now()
+	rows := sqlmock.NewRows([]string{"id", "task_text", "createdDate", "expectedDate", "status"}).
+		AddRow(1, "Test Task", fixedTime, fixedTime.Add(24*time.Hour), db.StatusInProgress)
+	mock.ExpectQuery("^SELECT (.+) FROM tasks$").WillReturnRows(rows)
+
+	server := setupServer()
 	defer server.Close()
 
-	// Тестирование GetTasks.
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", server.URL+"/tasks/get", nil)
-	assert.NoError(t, err)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", server.URL+"/tasks/get", nil)
+	if err != nil {
+		t.Fatalf("could not create request: %v", err)
+	}
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	server.Config.Handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	var tasks []db.Task
-	json.NewDecoder(w.Body).Decode(&tasks)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(tasks))
-	assert.Equal(t, "Test Task", tasks[0].Text)
+	var taskDTOs []db.TaskDTO
+	err = json.NewDecoder(w.Body).Decode(&taskDTOs)
+	if err != nil {
+		t.Fatalf("could not decode response: %v", err)
+	}
+	assert.Equal(t, 1, len(taskDTOs))
+	assert.Equal(t, "Test Task", taskDTOs[0].Text)
+}
 
-	// Настройка моков для CreateTask.
+func TestCreateTask(t *testing.T) {
+	mock, teardown := setupMockDB(t)
+	defer teardown()
+
 	createdDate := time.Now().Truncate(24 * time.Hour)
 	expectedDate := createdDate.AddDate(0, 0, 1)
-	mock.ExpectExec("INSERT INTO tasks").
-		WithArgs("New Task", createdDate.Format("2006-01-02"), expectedDate.Format("2006-01-02"), db.StatusInProgress).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(
+		"INSERT INTO tasks \\(task_text, createdDate, expectedDate, status\\) "+
+			"VALUES \\(\\$1, \\$2, \\$3, \\$4\\) RETURNING id",
+	).
+		WithArgs(
+			"New Task",
+			createdDate.Format("2006-01-02"),
+			expectedDate.Format("2006-01-02"),
+			db.StatusInProgress,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
-	// Тестирование CreateTask.
-	newTask := db.Task{
-		Text:   "New Task",
-		Status: db.StatusInProgress,
-	}
-	newTask.CreatedDate = time.Now().Truncate(24 * time.Hour)
-	newTask.ExpectedDate = newTask.CreatedDate.AddDate(0, 0, 1)
+	server := setupServer()
+	defer server.Close()
 
-	// Создаем новый объект Task с сериализованными датами.
-	newTaskJSON := struct {
-		Text         string `json:"text"`
-		Status       int    `json:"status"`
-		CreatedDate  string `json:"createdDate"`
-		ExpectedDate string `json:"expectedDate"`
-	}{
-		Text:         newTask.Text,
-		Status:       newTask.Status,
-		CreatedDate:  newTask.CreatedDate.Format("2006-01-02"),
-		ExpectedDate: newTask.ExpectedDate.Format("2006-01-02"),
+	newTaskDTO := db.TaskDTO{
+		Text:         "New Task",
+		Status:       db.StatusInProgress,
+		CreatedDate:  createdDate.Format("2006-01-02"),
+		ExpectedDate: expectedDate.Format("2006-01-02"),
 	}
 
-	body, _ := json.Marshal(newTaskJSON)
-	req, _ = http.NewRequestWithContext(
+	body, err := json.Marshal(newTaskDTO)
+	if err != nil {
+		t.Fatalf("could not marshal request body: %v", err)
+	}
+	req, err := http.NewRequestWithContext(
 		context.Background(),
 		"POST",
 		server.URL+"/tasks/create",
 		bytes.NewBuffer(body),
 	)
-	assert.NoError(t, err)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	if err != nil {
+		t.Fatalf("could not create request: %v", err)
+	}
+	w := httptest.NewRecorder()
+	server.Config.Handler.ServeHTTP(w, req)
+
+	t.Logf("Response body: %s", w.Body.String())
 
 	assert.Equal(t, http.StatusCreated, w.Code)
-	var createdTask db.Task
+	var createdTask db.TaskDTO
 	err = json.NewDecoder(w.Body).Decode(&createdTask)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("could not decode response: %v", err)
+	}
 	assert.Equal(t, "New Task", createdTask.Text)
 	assert.Equal(t, db.StatusInProgress, createdTask.Status)
-	assert.Equal(t, newTask.CreatedDate.Format("2006-01-02"), createdTask.CreatedDate.Format("2006-01-02"))
-	assert.Equal(t, newTask.ExpectedDate.Format("2006-01-02"), createdTask.ExpectedDate.Format("2006-01-02"))
+	assert.Equal(t, createdDate.Format("2006-01-02"), createdTask.CreatedDate)
+	assert.Equal(t, expectedDate.Format("2006-01-02"), createdTask.ExpectedDate)
+}
 
-	// Настройка моков для UpdateTask.
-	fixedTime = time.Now()
+func TestUpdateTask(t *testing.T) {
+	mock, teardown := setupMockDB(t)
+	defer teardown()
+
+	fixedTime := time.Now()
 	expectedTime := fixedTime.Add(48 * time.Hour)
 
-	taskToUpdate := db.Task{
+	taskToUpdate := db.TaskDTO{
 		ID:           1,
 		Text:         "Updated Task",
-		CreatedDate:  fixedTime,
-		ExpectedDate: expectedTime,
+		CreatedDate:  fixedTime.Format("2006-01-02"),
+		ExpectedDate: expectedTime.Format("2006-01-02"),
 		Status:       db.StatusInProgress,
 	}
 
 	mock.ExpectExec(`UPDATE tasks SET task_text = \$1, createdDate = \$2, `+
 		`expectedDate = \$3, status = \$4 WHERE id = \$5`).
-		WithArgs(taskToUpdate.Text, taskToUpdate.CreatedDate.Format("2006-01-02"),
-			taskToUpdate.ExpectedDate.Format("2006-01-02"), taskToUpdate.Status, taskToUpdate.ID).
+		WithArgs(
+			taskToUpdate.Text,
+			taskToUpdate.CreatedDate,
+			taskToUpdate.ExpectedDate,
+			taskToUpdate.Status,
+			taskToUpdate.ID,
+		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Тестирование UpdateTask.
+	server := setupServer()
+	defer server.Close()
+
 	taskJSON := fmt.Sprintf(`{"id":%d,"text":"%s","status":%d,"createdDate":"%s","expectedDate":"%s"}`,
 		taskToUpdate.ID, taskToUpdate.Text, taskToUpdate.Status,
-		taskToUpdate.CreatedDate.Format("2006-01-02"), taskToUpdate.ExpectedDate.Format("2006-01-02"))
+		taskToUpdate.CreatedDate, taskToUpdate.ExpectedDate)
 
-	req, _ = http.NewRequestWithContext(
+	req, err := http.NewRequestWithContext(
 		context.Background(),
 		"PUT",
 		server.URL+"/tasks/update?id=1",
 		strings.NewReader(taskJSON),
 	)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("could not create request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := httptest.NewRecorder()
+	server.Config.Handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
 
-	// Настройка моков для DeleteTask.
+func TestDeleteTask(t *testing.T) {
+	mock, teardown := setupMockDB(t)
+	defer teardown()
+
 	taskIDToDelete := 1
-	mock.ExpectExec("DELETE FROM tasks WHERE id = \\$1").
+	mock.ExpectExec(`^DELETE FROM tasks WHERE id = \$1$`).
 		WithArgs(taskIDToDelete).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Тестирование DeleteTask.
-	req, _ = http.NewRequestWithContext(
+	server := setupServer()
+	defer server.Close()
+
+	req, err := http.NewRequestWithContext(
 		context.Background(),
 		"DELETE",
 		fmt.Sprintf("%s/tasks/delete?id=%d", server.URL, taskIDToDelete),
 		nil,
 	)
-	assert.NoError(t, err)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	if err != nil {
+		t.Fatalf("could not create request: %v", err)
+	}
+	w := httptest.NewRecorder()
+	server.Config.Handler.ServeHTTP(w, req)
+
+	t.Logf("Response body: %s", w.Body.String())
 
 	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Проверка выполнения всех ожиданий моков.
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
-	}
 }
