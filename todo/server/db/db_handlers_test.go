@@ -106,14 +106,15 @@ func TestCreateTask(t *testing.T) {
 	expectedDateStr := task.ExpectedDate.Format("2006-01-02")
 
 	// Настройка ожидаемого запроса и возвращаемого результата.
-	mock.ExpectExec("INSERT INTO tasks").
+	mock.ExpectQuery("INSERT INTO tasks").
 		WithArgs(task.Text, createdDateStr, expectedDateStr, task.Status).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
 	// Вызов тестируемой функции.
-	err = CreateTask(task)
+	id, err := CreateTask(task)
 
 	assert.NoError(t, err)
+	assert.Equal(t, int64(1), id)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -169,4 +170,66 @@ func TestDeleteTask(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTaskToDTO(t *testing.T) {
+	task := Task{
+		ID:           1,
+		Text:         "Test task",
+		CreatedDate:  time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+		ExpectedDate: time.Date(2023, 10, 10, 0, 0, 0, 0, time.UTC),
+		Status:       StatusInProgress,
+	}
+
+	dto := task.ToDTO()
+
+	if dto.ID != task.ID {
+		t.Errorf("expected ID %d, got %d", task.ID, dto.ID)
+	}
+	if dto.Text != task.Text {
+		t.Errorf("expected Text %s, got %s", task.Text, dto.Text)
+	}
+	if dto.CreatedDate != "2023-10-01" {
+		t.Errorf("expected CreatedDate 2023-10-01, got %s", dto.CreatedDate)
+	}
+	if dto.ExpectedDate != "2023-10-10" {
+		t.Errorf("expected ExpectedDate 2023-10-10, got %s", dto.ExpectedDate)
+	}
+	if dto.Status != task.Status {
+		t.Errorf("expected Status %d, got %d", task.Status, dto.Status)
+	}
+}
+
+func TestTaskDTOToTask(t *testing.T) {
+	dto := TaskDTO{
+		ID:           1,
+		Text:         "Test task",
+		CreatedDate:  "2023-10-01",
+		ExpectedDate: "2023-10-10",
+		Status:       StatusInProgress,
+	}
+
+	task, err := dto.ToTask()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedCreatedDate := time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC)
+	expectedExpectedDate := time.Date(2023, 10, 10, 0, 0, 0, 0, time.UTC)
+
+	if task.ID != dto.ID {
+		t.Errorf("expected ID %d, got %d", dto.ID, task.ID)
+	}
+	if task.Text != dto.Text {
+		t.Errorf("expected Text %s, got %s", dto.Text, task.Text)
+	}
+	if !task.CreatedDate.Equal(expectedCreatedDate) {
+		t.Errorf("expected CreatedDate %v, got %v", expectedCreatedDate, task.CreatedDate)
+	}
+	if !task.ExpectedDate.Equal(expectedExpectedDate) {
+		t.Errorf("expected ExpectedDate %v, got %v", expectedExpectedDate, task.ExpectedDate)
+	}
+	if task.Status != dto.Status {
+		t.Errorf("expected Status %d, got %d", dto.Status, task.Status)
+	}
 }
